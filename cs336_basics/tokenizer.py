@@ -195,6 +195,34 @@ class Tokenizer:
                 token_ids.extend(self._apply_merge_to_token(token_bytes))
         
         return token_ids
+    
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        buffer = ""
+        for chunk in iterable:
+            buffer += chunk
 
+            last_boundary = 0
+            if self.special_tokens:
+                self.special_tokens = sorted(self.special_tokens, key=len, reverse=True)
+                escaped_special_tokens = [re.escape(token) for token in self.special_tokens]
+                pattern = '|'.join(escaped_special_tokens)
+                matches = list(re.finditer(pattern, buffer))
+                if matches:
+                    last_boundary = matches[-1].start()
+            
+            if last_boundary == 0:
+                matches = list(self.pattern.finditer(buffer))
+                if matches:
+                    last_boundary = matches[-1].start()
+            
+            if last_boundary > 0:
+                text = buffer[:last_boundary]
+                for token_id in self.encode(text):
+                    yield token_id
+                buffer = buffer[last_boundary:]
+            
+        if buffer:
+            for token_id in self.encode(buffer):
+                yield token_id
         
     
