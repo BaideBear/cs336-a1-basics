@@ -102,6 +102,7 @@ class RoPE(nn.Module):
         x: [..., seq_len, d_k]
         token_positions: [..., seq_len]
         """
+        seq_len = x.size(-2)
         #将x和token_positions在seq_len前的形状广播到一致
         if token_positions.dim()+1 < x.dim():
             t = x.dim()-token_positions.dim()-1
@@ -113,7 +114,9 @@ class RoPE(nn.Module):
         x_shaped = rearrange(x, "... seq_len (d_pair pair) -> ... seq_len d_pair pair", pair=2)
 
         # expand_pos: [..., seq_len], 不需要expand操作，实际上索引操作不会消除最后一列
-        expand_pos = token_positions
+        # 这里的截取操作是因为后续的输入token_pos的形状为[..., max_seq_len/context_len]
+        # 这个实验的符号统一度有点差。。。
+        expand_pos = token_positions[..., :seq_len]
         # torch的索引功能，用cos_cached的第一列作为索引，得到expand_pos最后一列的查询结果
         # cos: [..., seq_len, d_k//2]
         cos = self.cos_cached[expand_pos]
@@ -168,6 +171,7 @@ class MHA(nn.Module):
                     v_proj_weight: Float[Tensor, " d_v d_model"]=None,
                     o_proj_weight: Float[Tensor, " d_model d_v"]=None,
                     token_positions: Int[Tensor, " ... sequence_length"] | None = None) :
+        #这里q,k,v,o proj的形状实际上都是[d_model, d_model],需求接口上的标注造成了误解
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -203,3 +207,70 @@ class MHA(nn.Module):
         output = scaled_dot_product_attention(q, k, v, mask)
         output = rearrange(output, "... h seq hd -> ... seq (h hd)")
         return self.o_proj(output)
+
+class Transformer(nn.Module):
+    def __init__(self, vocab_size: int, context_length: int, d_model: int, num_layers: int,
+                num_heads: int, d_ff: int, rope_theta: float,
+                weights: dict[str, Tensor]):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.rope_theta = rope_theta
+        self.weights = weights
+
+        self.token_embeddings = Embedding(vocab_size, d_model, weights=weights['token_embeddings.weight'])
+        self.layers = nn.ModuleList()
+        for layer_idx in range(num_layers):
+            q_proj_weight = weights[f'layers.{layer_idx}.attn.q_proj.weight']
+            k_proj_weight = weights[f'layers.{layer_idx}.attn.k_proj.weight']
+            v_proj_weight = weights[f'layers.{layer_idx}.attn.v_proj.weight']
+            o_proj_weight = weights[f'layers.{layer_idx}.attn.output_proj.weight']
+
+            ln1_weight = weights[f'layers.{layer_idx}.ln1.weight']
+            ln2_weight = weights[f'layers.{layer_idx}.ln2.weight']
+
+            ffn_w1_weight = weights[f'layers.{layer_idx}.ffn.w1.weight']
+            ffn_w2_weight = weights[f'layers.{layer_idx}.ffn.w2.weight']
+            ffn_w3_weight = weights[f'layers.{layer_idx}.ffn.w3.weight']
+
+            token_positions = torch.arange(context_length)
+
+            mha = MHA(d_model, num_heads, max_seq_len=context_length, use_rope=True, theta=rope_theta,
+                        q_proj_weight=q_proj_weight, k_proj_weight=k_proj_weight,
+                        v_proj_weight=v_proj_weight, o_proj_weight=o_proj_weight,
+                        token_positions=torch.arange(context_length))
+            ffn = FFN(d_model, d_ff, ffn_w1_weight, ffn_w2_weight, ffn_w3_weight)
+            ln1 = RMSNorm(d_model, weights=ln1_weight)
+            ln2 = RMSNorm(d_model, weights=ln2_weight)
+
+            layer = nn.ModuleDict({
+                'mha': mha,
+                'ffn': ffn,
+                'ln1': ln1,
+                'ln2': ln2
+            })
+            self.layers.append(layer)
+        ln_final_weight = weights['ln_final.weight']
+        self.ln_final = RMSNorm(d_model, weights=ln_final_weight)
+        lm_head_weight = weights['lm_head.weight']
+        self.lm_head = Linear(d_model, vocab_size, weights=lm_head_weight)
+
+    def forward(self, in_indices: Int[Tensor, "batch_size sequence_length"]) -> Float[Tensor, "batch_size sequence_length vocab_size"]:
+        x = self.token_embeddings(in_indices)
+        for layer in self.layers:
+            mha = layer['mha']
+            ffn = layer['ffn']
+            ln1 = layer['ln1']
+            ln2 = layer['ln2']
+
+            x = x + mha(ln1(x))
+            x = x + ffn(ln2(x))
+        x = self.ln_final(x)
+        logits = self.lm_head(x)
+        return logits
+    
+

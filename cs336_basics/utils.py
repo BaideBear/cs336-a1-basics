@@ -1,4 +1,7 @@
 from functools import lru_cache
+import math
+import torch
+from collections.abc import Iterable
 
 @lru_cache
 def bytes_to_unicode() -> dict[int, str]:
@@ -46,3 +49,65 @@ def bytes_to_unicode() -> dict[int, str]:
     characters = [chr(n) for n in cs]
     d = dict(zip(bs, characters))
     return d
+
+def lr_cosine_schedule(
+    it: int,
+    max_learning_rate: float,
+    min_learning_rate: float,
+    warmup_iters: int,
+    cosine_cycle_iters: int,
+):
+    """
+    Given the parameters of a cosine learning rate decay schedule (with linear
+    warmup) and an iteration number, return the learning rate at the given
+    iteration under the specified schedule.
+
+    Args:
+        it (int): Iteration number to get learning rate for.
+        max_learning_rate (float): alpha_max, the maximum learning rate for
+            cosine learning rate schedule (with warmup).
+        min_learning_rate (float): alpha_min, the minimum / final learning rate for
+            the cosine learning rate schedule (with warmup).
+        warmup_iters (int): T_w, the number of iterations to linearly warm-up
+            the learning rate.
+        cosine_cycle_iters (int): T_c, the number of cosine annealing iterations.
+
+    Returns:
+        Learning rate at the given iteration under the specified schedule.
+    """
+    if it < warmup_iters:
+        return it / warmup_iters * max_learning_rate
+    else:
+        if it >= warmup_iters and it < cosine_cycle_iters:
+            return min_learning_rate + 0.5 * (1 + math.cos(math.pi*(it-warmup_iters)/(cosine_cycle_iters-warmup_iters))) * (max_learning_rate-min_learning_rate)
+        else:
+            return min_learning_rate
+        
+
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, lr: float=1e-6) -> None:
+    """Given a set of parameters, clip their combined gradients to have l2 norm at most max_l2_norm.
+
+    Args:
+        parameters (Iterable[torch.nn.Parameter]): collection of trainable parameters.
+        max_l2_norm (float): a positive value containing the maximum l2-norm.
+
+    The gradients of the parameters (parameter.grad) should be modified in-place.
+    """
+    prarms_with_grad = [p for p in parameters if p.grad is not None]
+    if len(prarms_with_grad) == 0:
+        return
+    
+    total_norm = 0.0
+    for p in prarms_with_grad:
+        param_norm = p.grad.data.norm(2).item()
+        total_norm += param_norm ** 2
+    
+    total_norm = total_norm ** 0.5
+    if total_norm > max_l2_norm:
+        clip = max_l2_norm / (total_norm + lr)
+        for p in prarms_with_grad:
+            p.grad.data.mul_(clip)
+    
+    return total_norm
+
+    
