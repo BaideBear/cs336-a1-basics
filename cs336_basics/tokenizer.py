@@ -1,9 +1,51 @@
 import os
 import regex as re
-from typing import Dict, Type, List, Tuple, Optional, Iterable, Iterator
+from typing import Dict, Type, List, Tuple, Optional, Iterable, Iterator, Union
 from collections import defaultdict, Counter
 import json
 from .utils import bytes_to_unicode
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import numpy as np
+from tqdm import tqdm
+import heapq
+
+def save_bpe_vocab_and_merges(
+    vocab: dict[int, bytes],
+    merges: list[tuple[bytes, bytes]],
+    vocab_output_path: str | os.PathLike,
+    merges_output_path: str | os.PathLike
+):
+    """
+    按照GPT-2的格式保存BPE词汇表和合并规则
+    
+    Args:
+        vocab: BPE词汇表 {id: bytes}
+        merges: 合并规则列表 [(bytes, bytes)]
+        vocab_output_path: 词汇表输出路径
+        merges_output_path: 合并规则输出路径
+    """
+    # 获取GPT-2的字节到Unicode映射
+    byte_encoder = bytes_to_unicode()
+    byte_decoder = {v: k for k, v in byte_encoder.items()}
+    
+    # 保存合并规则（merges）
+    with open(merges_output_path, 'w', encoding='utf-8') as f:
+        for merge_pair in merges:
+            # 将字节对转换为GPT-2编码的字符串
+            token1_encoded = ''.join(byte_encoder[b] for b in merge_pair[0])
+            token2_encoded = ''.join(byte_encoder[b] for b in merge_pair[1])
+            f.write(f"{token1_encoded} {token2_encoded}\n")
+    
+    # 保存词汇表（vocab）
+    # 需要将词汇表转换为GPT-2的格式：{encoded_token: index}
+    gpt2_format_vocab = {}
+    for idx, token_bytes in vocab.items():
+        # 将字节转换为GPT-2编码的字符串
+        encoded_token = ''.join(byte_encoder[b] for b in token_bytes)
+        gpt2_format_vocab[encoded_token] = idx
+    
+    with open(vocab_output_path, 'w', encoding='utf-8') as f:
+        json.dump(gpt2_format_vocab, f, ensure_ascii=False, indent=2)
 
 def train_bpe(
     input_path: str | os.PathLike,
@@ -53,6 +95,8 @@ def train_bpe(
 
     merge_count = 0
     while len(vocab) < vocab_size:
+        if len(vocab) % 50 == 0: 
+            print(f"num vocab now: {len(vocab)}")
         pair_freq = defaultdict(int)
         for tokens, freq in current_vocab.items():
             for i in range(len(tokens)-1):

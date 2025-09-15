@@ -10,8 +10,8 @@ class Linear(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.device = device
-        self.dtype = dtype
+        # self.device = device
+        # self.dtype = dtype
 
         if weights is None:
             weight = torch.empty(out_features, in_features, device=device, dtype=dtype)
@@ -29,8 +29,8 @@ class Embedding(nn.Module):
         super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.device = device
-        self.dtype = dtype
+        # self.device = device
+        # self.dtype = dtype
 
         if weights is None:
             weights = torch.empty(num_embeddings, embedding_dim, device=device, dtype=dtype)
@@ -45,8 +45,8 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.eps = eps
-        self.device = device
-        self.dtype = dtype
+        # self.device = device
+        # self.dtype = dtype
 
         if weights is None:
             weights = torch.ones(d_model)
@@ -157,7 +157,8 @@ def scaled_dot_product_attention(
     d_k = Q.size(-1)
     O = Q @ K.transpose(-1, -2) / math.sqrt(d_k)
     if mask is not None:
-        masked_O = O.masked_fill(mask==False, float('-inf'))
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        masked_O = O.masked_fill(mask==False, float('-inf')).to(device)
     else:
         masked_O = O
     softmax_ = Softmax()
@@ -201,7 +202,8 @@ class MHA(nn.Module):
             q = self.rope(q, self.token_positions)
             k = self.rope(k, self.token_positions)
 
-        mask = ~torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        mask = ~torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool().to(device)
         mask = mask.unsqueeze(0).unsqueeze(0)
 
         output = scaled_dot_product_attention(q, k, v, mask)
@@ -211,7 +213,7 @@ class MHA(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, vocab_size: int, context_length: int, d_model: int, num_layers: int,
                 num_heads: int, d_ff: int, rope_theta: float,
-                weights: dict[str, Tensor]):
+                weights: dict[str, Tensor] = None):
         super().__init__()
         self.vocab_size = vocab_size
         self.context_length = context_length
@@ -222,20 +224,21 @@ class Transformer(nn.Module):
         self.rope_theta = rope_theta
         self.weights = weights
 
-        self.token_embeddings = Embedding(vocab_size, d_model, weights=weights['token_embeddings.weight'])
+        token_emb_weight = weights['token_embeddings.weight'] if weights is not None else None
+        self.token_embeddings = Embedding(vocab_size, d_model, weights=token_emb_weight)
         self.layers = nn.ModuleList()
         for layer_idx in range(num_layers):
-            q_proj_weight = weights[f'layers.{layer_idx}.attn.q_proj.weight']
-            k_proj_weight = weights[f'layers.{layer_idx}.attn.k_proj.weight']
-            v_proj_weight = weights[f'layers.{layer_idx}.attn.v_proj.weight']
-            o_proj_weight = weights[f'layers.{layer_idx}.attn.output_proj.weight']
+            q_proj_weight = weights[f'layers.{layer_idx}.attn.q_proj.weight'] if weights is not None else None
+            k_proj_weight = weights[f'layers.{layer_idx}.attn.k_proj.weight'] if weights is not None else None
+            v_proj_weight = weights[f'layers.{layer_idx}.attn.v_proj.weight'] if weights is not None else None
+            o_proj_weight = weights[f'layers.{layer_idx}.attn.output_proj.weight'] if weights is not None else None
 
-            ln1_weight = weights[f'layers.{layer_idx}.ln1.weight']
-            ln2_weight = weights[f'layers.{layer_idx}.ln2.weight']
+            ln1_weight = weights[f'layers.{layer_idx}.ln1.weight'] if weights is not None else None
+            ln2_weight = weights[f'layers.{layer_idx}.ln2.weight'] if weights is not None else None
 
-            ffn_w1_weight = weights[f'layers.{layer_idx}.ffn.w1.weight']
-            ffn_w2_weight = weights[f'layers.{layer_idx}.ffn.w2.weight']
-            ffn_w3_weight = weights[f'layers.{layer_idx}.ffn.w3.weight']
+            ffn_w1_weight = weights[f'layers.{layer_idx}.ffn.w1.weight'] if weights is not None else None
+            ffn_w2_weight = weights[f'layers.{layer_idx}.ffn.w2.weight'] if weights is not None else None
+            ffn_w3_weight = weights[f'layers.{layer_idx}.ffn.w3.weight'] if weights is not None else None
 
             token_positions = torch.arange(context_length)
 
@@ -254,9 +257,9 @@ class Transformer(nn.Module):
                 'ln2': ln2
             })
             self.layers.append(layer)
-        ln_final_weight = weights['ln_final.weight']
+        ln_final_weight = weights['ln_final.weight'] if weights is not None else None
         self.ln_final = RMSNorm(d_model, weights=ln_final_weight)
-        lm_head_weight = weights['lm_head.weight']
+        lm_head_weight = weights['lm_head.weight'] if weights is not None else None
         self.lm_head = Linear(d_model, vocab_size, weights=lm_head_weight)
 
     def forward(self, in_indices: Int[Tensor, "batch_size sequence_length"]) -> Float[Tensor, "batch_size sequence_length vocab_size"]:

@@ -620,4 +620,5 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     #raise NotImplementedError
-    return tokenizer.train_bpe(input_path, vocab_size, special_tokens)
+    vocab, merges = tokenizer.train_bpe(input_path, vocab_size, special_tokens)
+    return vocab, merges

@@ -5,6 +5,11 @@ import math
 from jaxtyping import Bool, Float, Int
 
 def cross_entropy(inputs: Float[Tensor, "batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
+    original_shape = inputs.shape
+    vocab_size = inputs.shape[-1]
+    inputs = inputs.view(-1, vocab_size)
+    targets = targets.view(-1)
+
     #数值稳定性
     logits_max = torch.max(inputs, dim=-1, keepdim=True).values #[batch_size, 1]
     logits_stable = inputs - logits_max #[batch_size, vocab_size]
