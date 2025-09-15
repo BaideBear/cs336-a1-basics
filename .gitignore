@@ -167,3 +167,4 @@ cython_debug/
 *.pt
 *.npy
 *.json
+*.wandb
