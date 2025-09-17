@@ -115,7 +115,6 @@ class RoPE(nn.Module):
 
         # expand_pos: [..., seq_len], 不需要expand操作，实际上索引操作不会消除最后一列
         # 这里的截取操作是因为后续的输入token_pos的形状为[..., max_seq_len/context_len]
-        # 这个实验的符号统一度有点差。。。
         expand_pos = token_positions[..., :seq_len]
         # torch的索引功能，用cos_cached的第一列作为索引，得到expand_pos最后一列的查询结果
         # cos: [..., seq_len, d_k//2]
@@ -172,7 +171,7 @@ class MHA(nn.Module):
                     v_proj_weight: Float[Tensor, " d_v d_model"]=None,
                     o_proj_weight: Float[Tensor, " d_model d_v"]=None,
                     token_positions: Int[Tensor, " ... sequence_length"] | None = None) :
-        #这里q,k,v,o proj的形状实际上都是[d_model, d_model],需求接口上的标注造成了误解
+        #这里我默认了d_model = d_k = d_v
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
